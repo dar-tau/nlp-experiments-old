@@ -109,8 +109,8 @@ test_ds = CIFAR100("{}/data/cifar100".format(guy_folder), download = True, trans
 
 batch_size = 8
 
-lr = {'bert-vision': [3e-7, 1e-6, 5e-6, 1e-5, 5e-5],
-      'resnet101': [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+lr = {'bert-vision': [1e-6, 5e-6, 1e-5, 5e-5],
+      'resnet101': [3e-4, 1e-3, 3e-3, 1e-2]
       }
 
 optimizerDict = {'adam': torch.optim.Adam,
@@ -133,6 +133,8 @@ def makeModel(modelName):
 def train(config):
   
   optimizerAlg = optimizerDict[config.optimizer]
+  if config.model == 'bert-vision' and config.optimizer == 'adam':
+    optimizerAlg = optimizerDict['adamw']
   modelName = config.model
   lr_idx = config.lr_idx
   model = makeModel(modelName)
@@ -153,12 +155,11 @@ def train(config):
       loss = criterion(yhat, y)
       acc_sum += (yhat.argmax(dim =  -1) == y).sum()    
       wandb.log({'loss': loss.item(), 
-                 'acc': acc_sum.item()/(i+1)})
+                 'acc': acc_sum.item() / (i+1)})
 
       loss.backward()
       optimizer.step()
 
 wandb.init()
 config = wandb.config
-print(config)
 train(config)
