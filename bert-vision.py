@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torchvision.datasets import ImageNet, ImageFolder, CIFAR10, CIFAR100
 from torchvision import transforms
-from torchvision.models import resnet101
+from torchvision.models import resnet101, resnet50
 from transformers import AutoModel, AutoTokenizer
 from transformers import AdamW
 import wandb
@@ -110,7 +110,7 @@ test_ds = CIFAR100("{}/data/cifar100".format(guy_folder), download = True, trans
 batch_size = 8
 
 lr = {'bert-vision': [1e-6, 5e-6, 1e-5, 5e-5],
-      'resnet101': [3e-4, 1e-3, 3e-3, 1e-2]
+      'resnet': [3e-4, 1e-3, 3e-3, 1e-2]
       }
 
 optimizerDict = {'adam': torch.optim.Adam,
@@ -119,11 +119,11 @@ optimizerDict = {'adam': torch.optim.Adam,
                  }
 
 def makeModel(modelName):
-  if modelName == 'resnet101':
-    model_resnet101 = resnet101(pretrained = True)
-    model_resnet101.fc = nn.Linear(vision_model.fc.in_features, 100)
-    model_resnet101.to(device)
-    model = model_resnet101
+  if modelName == 'resnet':
+    model_resnet = resnet50(pretrained = True)
+    model_resnet.fc = nn.Linear(model_resnet.fc.in_features, 100)
+    model_resnet.to(device)
+    model = model_resnet
   elif modelName == 'bert-vision':
     model = BertVision(len(train_ds.classes), (32,32)).to(device)
   else:
@@ -155,7 +155,7 @@ def train(config):
       loss = criterion(yhat, y)
       acc_sum += (yhat.argmax(dim =  -1) == y).sum()    
       wandb.log({'loss': loss.item(), 
-                 'acc': acc_sum.item() / (i+1)})
+                 'acc': acc_sum.item() / (batch_size * (i+1))})
 
       loss.backward()
       optimizer.step()
