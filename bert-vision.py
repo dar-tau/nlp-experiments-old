@@ -1,9 +1,18 @@
-paperspace = True
-guy_folder = "/content/"
-if paperspace: 
-    guy_folder = "/notebooks/"
 
-cache_dir = guy_folder+"/cache/transformer_cache"
+storageName = 'university'
+
+if storageName == 'paperspace': 
+    guy_folder = "/notebooks/"
+elif storageName == 'colab':
+    guy_folder = "/content/"
+elif storageName == 'university':
+    guy_folder = '/vol/scratch/guy/'
+
+    
+cache_dir = guy_folder + "/cache/transformer_cache"
+
+
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -14,9 +23,12 @@ import torch.nn.functional as F
 from torchvision.datasets import ImageNet, ImageFolder, CIFAR10, CIFAR100
 from torchvision import transforms
 from torchvision.models import resnet101, resnet50
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, AutoConfig
 from transformers import AdamW
 import wandb
+import os.path
+
+assert(os.path.isdir(cache_dir))
 
 
 class DummyLayer(nn.Module):
@@ -27,14 +39,19 @@ class DummyLayer(nn.Module):
     return x
 
 class PlainBERT(nn.Module):
-    def __init__(self, n_tokens, min_layer = None):
+    def __init__(self, n_tokens, min_layer = None, pretrained = True):
         super().__init__()
         self.nLayers = 6
         self.nHeads = 12
         self.seqLen = 512
 
+        modelName = 'distilbert-base-uncased'
+        if pretrained:
+          bert = AutoModel.from_pretrained(modelName, cache_dir = cache_dir)
+        else:
+          bertConfig = AutoConfig.from_pretrained(modelName, cache_dir = cache_dir)
+          bert = AutoModel.from_config(bertConfig)
 
-        bert = AutoModel.from_pretrained('distilbert-base-uncased', cache_dir = cache_dir)
         self.position_embeddings = nn.Parameter(
             torch.Tensor(bert.embeddings.position_embeddings(torch.arange(self.seqLen)).detach().numpy()))
         if min_layer is None:
@@ -48,16 +65,14 @@ class PlainBERT(nn.Module):
         
           self.bert = bert_
 
-        self.bert.requires_grad_(False)
-
-
     def forward(self, x):
         return self.bert.forward(x + self.position_embeddings, attn_mask = torch.ones(x.size(0), 512).to(x.device),
                                 head_mask = torch.ones(self.nLayers, x.size(0), 
                                                        self.nHeads, self.seqLen, self.seqLen).to(x.device))
 
 class BertVision(nn.Module):
-    def __init__(self,  n_classes, img_dim):
+    def __init__(self,  n_classes, img_dim, pretrained = True,
+                 freeze = False):
         super().__init__()
         self.with_classifier = True
         self.n_tokens = np.prod(img_dim)
@@ -73,9 +88,11 @@ class BertVision(nn.Module):
                                 )
         
         self.top.apply(self._init_top)
-        self.bert = PlainBERT(n_tokens = self.n_tokens)
+        self.bert = PlainBERT(n_tokens = self.n_tokens, pretrained = pretrained)
         self.fc = nn.Linear(768 * self.n_tokens//2, n_classes)
         self.layer_norm = nn.LayerNorm((512,))
+        if freeze: 
+          self.bert.requires_grad_(False)
 
     def toggleIntermediate(self):
         self.with_classifier = not self.with_classifier
@@ -118,26 +135,42 @@ optimizerDict = {'adam': torch.optim.Adam,
                  'sgd': torch.optim.SGD, # No momentum
                  }
 
-def makeModel(modelName):
+def makeModel(modelName, pretrained, freeze):
   if modelName == 'resnet':
-    model_resnet = resnet50(pretrained = True)
+    model_resnet = resnet50(pretrained = pretrained)
+    if freeze:
+      model_resnet.requires_grad_(False)
     model_resnet.fc = nn.Linear(model_resnet.fc.in_features, 100)
     model_resnet.to(device)
     model = model_resnet
   elif modelName == 'bert-vision':
-    model = BertVision(len(train_ds.classes), (32,32)).to(device)
+    model = BertVision(len(train_ds.classes), (32,32), pretrained = pretrained,
+                       freeze = freeze).to(device)
   else:
     model = Sequential()
   return model
 
+def _convertBool(s):
+  s = s.lower()
+  assert(s in ['true', 'false'])
+  return s == 'true'
+
+
 def train(config):
   
   optimizerAlg = optimizerDict[config.optimizer]
-  if config.model == 'bert-vision' and config.optimizer == 'adam':
-    optimizerAlg = optimizerDict['adamw']
+  if config.model == 'bert-vision': 
+    if config.optimizer == 'adam':
+      optimizerAlg = optimizerDict['adamw']
+    if config.optimizer == 'sgd':
+      return
+    
+
   modelName = config.model
   lr_idx = config.lr_idx
-  model = makeModel(modelName)
+  pretrained = _convertBool(config.pretrained)
+  freeze = _convertBool(config.freeze)
+  model = makeModel(modelName, pretrained = pretrained, freeze = freeze)
 
 
   criterion = nn.CrossEntropyLoss()
@@ -160,6 +193,18 @@ def train(config):
       loss.backward()
       optimizer.step()
 
-wandb.init()
+wandb.init(project = 'bert-vision')
+
+from argparse import ArgumentParser
+parser = ArgumentParser()
+parser.add_argument('--lr_idx', type=int, default=0, metavar='N')
+parser.add_argument('--optimizer', type=str, default='adam', metavar='N')
+parser.add_argument('--pretrained', type=str, default='true', metavar='N')
+parser.add_argument('--model', type=str, default='bert-vision', metavar='N')
+parser.add_argument('--freeze', type=str, default='false', metavar='N')
+
+args = parser.parse_args()
+wandb.config.update(args)
+
 config = wandb.config
 train(config)
